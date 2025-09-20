@@ -1,0 +1,6 @@
+Flask==3.0.3
+gunicorn==22.0.0
+requests==2.32.3
+numpy==2.1.1
+rapidfuzz==3.9.7
+python-dotenv==1.0.1
