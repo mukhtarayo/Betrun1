@@ -2,61 +2,126 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
+  <title>Betrun — Football Analysis</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Betrun</title>
-  <link rel="stylesheet" href="/static/style.css"/>
+  <style>
+    body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial; margin:0; background:#0b0f14; color:#eaeef3;}
+    header { padding:16px 20px; border-bottom:1px solid #1c2733; display:flex; align-items:center; gap:12px;}
+    .brand { font-weight:800; letter-spacing:0.5px; }
+    main { padding:20px; max-width:1200px; margin:0 auto;}
+    .grid { display:grid; gap:16px; }
+    .g-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    @media (max-width: 900px){ .g-2 { grid-template-columns: 1fr; } }
+    .card { background:#0f1720; border:1px solid #1c2733; border-radius:14px; padding:16px; }
+    label { display:block; font-size:12px; color:#93a4b8; margin-top:10px;}
+    input, select, textarea { width:100%; box-sizing:border-box; padding:10px 12px; background:#101a24; color:#eaeef3; border:1px solid #233245; border-radius:10px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap;}
+    .row > div { flex:1; min-width:180px; }
+    .btn { background:#2563eb; color:white; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; }
+    .btn.secondary { background:#334155; }
+    .btn.warn { background:#eab308; color:#111827; }
+    .btn.ghost { background:#17202a; color:#aab7c4; border:1px solid #223246; }
+    table { width:100%; border-collapse:collapse; margin-top:8px; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #1c2733; }
+    th { color:#9fb3c8; font-weight:600; }
+    .badge { font-size:12px; padding:2px 8px; border-radius:999px; display:inline-block; vertical-align:middle; }
+    .good { background:#0f5132; color:#d1fae5; }
+    .warn { background:#5b370a; color:#fde68a; }
+    .bad  { background:#4b0f15; color:#fecdd3; }
+    .muted { color:#93a4b8; }
+    small { color:#93a4b8; }
+    .pill { background:#111a24; border:1px dashed #2a3a4e; padding:8px 10px; border-radius:10px; display:inline-block; }
+    .kv { display:flex; gap:8px; align-items:center; margin-top:6px;}
+    .kv code { background:#0c141e; border:1px solid #1e2b3a; padding:2px 6px; border-radius:6px; }
+    a.btn { text-decoration:none; display:inline-block; }
+  </style>
 </head>
 <body>
   <header>
-    <h1>Betrun</h1>
-    <small>Football picks with live checks (API-Football)</small>
+    <div class="brand">⚽️ Betrun</div>
+    <div class="muted">Live football analysis (API-FOOTBALL)</div>
   </header>
 
-  <main>
+  <main class="grid g-2">
+    <!-- Left: Single Analysis -->
     <section class="card">
-      <h2>Analyze Football</h2>
-      <div class="grid grid-3">
-        <label>League <input id="league" placeholder="PT1, ENP, etc"/></label>
-        <label>Season <input id="season" type="number" value="2025"/></label>
-        <label>Derby? <input id="derby" type="checkbox"/></label>
-
-        <label>Home <input id="home" placeholder="Rio Ave"/></label>
-        <label>Away <input id="away" placeholder="FC Porto"/></label>
-        <div></div>
-
-        <label>Odds 1 <input id="odds1" type="number" step="0.01" placeholder="1.90"/></label>
-        <label>Odds X <input id="oddsX" type="number" step="0.01" placeholder="3.30"/></label>
-        <label>Odds 2 <input id="odds2" type="number" step="0.01" placeholder="4.20"/></label>
+      <h2 style="margin:0 0 8px;">Single Match Analysis</h2>
+      <div class="row">
+        <div><label>League</label><input id="league" placeholder="e.g. ENP, IT1"/></div>
+        <div><label>Season</label><input id="season" value="2025"/></div>
+        <div><label><input id="derby" type="checkbox"/> Derby?</label></div>
+      </div>
+      <div class="row">
+        <div><label>Home</label><input id="home" placeholder="Fulham"/></div>
+        <div><label>Away</label><input id="away" placeholder="Brentford"/></div>
+      </div>
+      <div class="row">
+        <div><label>Odds 1</label><input id="odds1" placeholder="1.95"/></div>
+        <div><label>Odds X</label><input id="oddsX" placeholder="3.40"/></div>
+        <div><label>Odds 2</label><input id="odds2" placeholder="3.45"/></div>
       </div>
 
-      <div class="grid grid-3">
-        <label>O/U lines <input id="ouLines" placeholder="1.5,2.5,3.5"/></label>
-        <label>Home TG lines <input id="homeTG" placeholder="0.5,1.5"/></label>
-        <label>Away TG lines <input id="awayTG" placeholder="0.5,1.5"/></label>
+      <div class="row">
+        <div><label>O/U lines</label><input id="ouLines" value="1.5,2.5,3.5"/></div>
+        <div><label>Home TG lines</label><input id="homeTG" value="0.5,1.5"/></div>
+        <div><label>Away TG lines</label><input id="awayTG" value="0.5,1.5"/></div>
       </div>
 
-      <div class="mkts">
-        <label><input class="mk" type="checkbox" value="1X2" checked/>1X2</label>
-        <label><input class="mk" type="checkbox" value="Double Chance" checked/>Double Chance</label>
-        <label><input class="mk" type="checkbox" value="Draw No Bet" checked/>DNB</label>
-        <label><input class="mk" type="checkbox" value="Over/Under" checked/>O/U</label>
-        <label><input class="mk" type="checkbox" value="BTTS" checked/>BTTS</label>
-        <label><input class="mk" type="checkbox" value="Team Goals" checked/>Team Goals</label>
-        <label><input class="mk" type="checkbox" value="1X2 + O/U" checked/>1X2 + O/U</label>
-        <label><input class="mk" type="checkbox" value="DC + BTTS" checked/>DC + BTTS</label>
-        <label><input class="mk" type="checkbox" value="Result + BTTS" checked/>Result + BTTS</label>
-        <label><input class="mk" type="checkbox" value="Correct Score" checked/>Correct Score</label>
-        <label><input class="mk" type="checkbox" value="Clean Sheet" checked/>Clean Sheet</label>
-        <label><input class="mk" type="checkbox" value="Win to Nil" checked/>Win to Nil</label>
-        <label><input class="mk" type="checkbox" value="Winning Margin" checked/>Winning Margin</label>
+      <div class="row">
+        <label>Markets</label>
+        <div class="row" style="gap:10px;">
+          <label><input class="mk" type="checkbox" value="1X2" checked/> 1X2</label>
+          <label><input class="mk" type="checkbox" value="Double Chance" checked/> Double Chance</label>
+          <label><input class="mk" type="checkbox" value="Draw No Bet" checked/> DNB</label>
+          <label><input class="mk" type="checkbox" value="Over/Under" checked/> O/U</label>
+          <label><input class="mk" type="checkbox" value="BTTS" checked/> BTTS</label>
+          <label><input class="mk" type="checkbox" value="Team Goals" checked/> Team Goals</label>
+          <label><input class="mk" type="checkbox" value="1X2 + O/U" checked/> 1X2 + O/U</label>
+          <label><input class="mk" type="checkbox" value="DC + BTTS" checked/> DC + BTTS</label>
+          <label><input class="mk" type="checkbox" value="Result + BTTS" checked/> Result + BTTS</label>
+          <label><input class="mk" type="checkbox" value="Correct Score" checked/> Correct Score</label>
+          <label><input class="mk" type="checkbox" value="Clean Sheet" checked/> Clean Sheet</label>
+          <label><input class="mk" type="checkbox" value="Win to Nil" checked/> Win to Nil</label>
+          <label><input class="mk" type="checkbox" value="Winning Margin" checked/> Winning Margin</label>
+        </div>
       </div>
 
-      <button onclick="analyzeFootball()">Analyze</button>
-      <button class="ghost" onclick="showEnv()">Check Env</button>
-      <pre id="env"></pre>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn" onclick="analyzeFootball()">Analyze</button>
+        <button class="btn ghost" onclick="checkEnv()">Check Env</button>
+      </div>
+
+      <div id="output"></div>
     </section>
 
-    <section id="output"></section>
+    <!-- Right: Get Matches + Debug -->
+    <section class="card">
+      <h2 style="margin:0 0 8px;">Get Matches (API-FOOTBALL)</h2>
+      <div class="row">
+        <div><label>League ID</label><input id="fxLeague" placeholder="e.g. 39 (EPL)"/></div>
+        <div><label>Season</label><input id="fxSeason" value="2025"/></div>
+      </div>
+      <div class="row">
+        <div><label>Date (YYYY-MM-DD)</label><input id="fxDate" placeholder="optional"/></div>
+        <div><label>Team ID (optional)</label><input id="fxTeam" placeholder="e.g. 33"/></div>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn" onclick="fetchFixtures()">Get Matches</button>
+      </div>
+      <div id="fixturesBox" style="margin-top:10px;"></div>
+
+      <hr style="border-color:#1c2733; margin:18px 0;">
+
+      <h2 style="margin:0 0 8px;">Debug & Env</h2>
+      <div class="row">
+        <div><label>Debug Team (name)</label><input id="dbgTeamName" placeholder="e.g. man city"/></div>
+        <div style="align-self:end;"><button class="btn secondary" onclick="debugTeam()">Find</button></div>
+      </div>
+      <div id="dbgTeamOut" class="pill" style="margin-top:8px;"><small>Results show here…</small></div>
+
+      <div class="kv"><div>Ping:</div><a class="btn ghost" target="_blank" href="/debug/ping">/debug/ping</a></div>
+      <div class="kv"><div>Env:</div><span id="envStatus"><em>Click “Check Env” in Single Match card</em></span></div>
+    </section>
   </main>
 
   <script src="/static/app.js"></script>
