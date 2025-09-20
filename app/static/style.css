@@ -1,0 +1,28 @@
+:root{
+  --bg:#0b1220;
+  --card:#0f1a30;
+  --text:#e7ecf3;
+  --muted:#9bb0cc;
+  --good:#17c964;
+  --warn:#f5a524;
+  --bad:#f31260;
+  --brand:#4a7dff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(180deg,#07101f,#0b1220);color:var(--text);font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif}
+header{padding:24px 20px;border-bottom:1px solid #1c2742;background:#0b1326cc;backdrop-filter:blur(6px);position:sticky;top:0}
+h1{margin:0;font-size:24px}
+main{max-width:1100px;margin:20px auto;padding:0 16px}
+.card{background:var(--card);border:1px solid #1b2a4d;border-radius:16px;padding:16px;box-shadow:0 10px 30px #00000040;margin-bottom:16px}
+.grid{display:grid;gap:10px}
+.grid-3{grid-template-columns:repeat(3,1fr)}
+.table{width:100%;border-collapse:collapse;margin:6px 0 14px}
+.table th,.table td{border:1px solid #24365f;padding:6px 8px;text-align:left;font-size:13px}
+input{width:100%;padding:8px;border-radius:10px;border:1px solid #274071;background:#0c1730;color:var(--text)}
+button{padding:10px 14px;border-radius:12px;border:1px solid #274071;background:var(--brand);color:white;font-weight:600;cursor:pointer}
+button.ghost{background:transparent}
+.badge{padding:4px 10px;border-radius:20px;font-weight:700;font-size:12px;border:1px solid #274071}
+.badge.good{background:#10281a;border-color:#1a4730;color:#46f58f}
+.badge.warn{background:#2b250c;border-color:#524015;color:#f5de78}
+.badge.bad{background:#2b1018;border-color:#4d1e2d;color:#ff7aa2}
+h2 small{color:var(--muted)}

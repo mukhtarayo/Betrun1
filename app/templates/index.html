@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Betrun</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+  <header>
+    <h1>Betrun</h1>
+    <small>Football picks with live checks (API-Football)</small>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Analyze Football</h2>
+      <div class="grid grid-3">
+        <label>League <input id="league" placeholder="PT1, ENP, etc"/></label>
+        <label>Season <input id="season" type="number" value="2025"/></label>
+        <label>Derby? <input id="derby" type="checkbox"/></label>
+
+        <label>Home <input id="home" placeholder="Rio Ave"/></label>
+        <label>Away <input id="away" placeholder="FC Porto"/></label>
+        <div></div>
+
+        <label>Odds 1 <input id="odds1" type="number" step="0.01" placeholder="1.90"/></label>
+        <label>Odds X <input id="oddsX" type="number" step="0.01" placeholder="3.30"/></label>
+        <label>Odds 2 <input id="odds2" type="number" step="0.01" placeholder="4.20"/></label>
+      </div>
+
+      <div class="grid grid-3">
+        <label>O/U lines <input id="ouLines" placeholder="1.5,2.5,3.5"/></label>
+        <label>Home TG lines <input id="homeTG" placeholder="0.5,1.5"/></label>
+        <label>Away TG lines <input id="awayTG" placeholder="0.5,1.5"/></label>
+      </div>
+
+      <div class="mkts">
+        <label><input class="mk" type="checkbox" value="1X2" checked/>1X2</label>
+        <label><input class="mk" type="checkbox" value="Double Chance" checked/>Double Chance</label>
+        <label><input class="mk" type="checkbox" value="Draw No Bet" checked/>DNB</label>
+        <label><input class="mk" type="checkbox" value="Over/Under" checked/>O/U</label>
+        <label><input class="mk" type="checkbox" value="BTTS" checked/>BTTS</label>
+        <label><input class="mk" type="checkbox" value="Team Goals" checked/>Team Goals</label>
+        <label><input class="mk" type="checkbox" value="1X2 + O/U" checked/>1X2 + O/U</label>
+        <label><input class="mk" type="checkbox" value="DC + BTTS" checked/>DC + BTTS</label>
+        <label><input class="mk" type="checkbox" value="Result + BTTS" checked/>Result + BTTS</label>
+        <label><input class="mk" type="checkbox" value="Correct Score" checked/>Correct Score</label>
+        <label><input class="mk" type="checkbox" value="Clean Sheet" checked/>Clean Sheet</label>
+        <label><input class="mk" type="checkbox" value="Win to Nil" checked/>Win to Nil</label>
+        <label><input class="mk" type="checkbox" value="Winning Margin" checked/>Winning Margin</label>
+      </div>
+
+      <button onclick="analyzeFootball()">Analyze</button>
+      <button class="ghost" onclick="showEnv()">Check Env</button>
+      <pre id="env"></pre>
+    </section>
+
+    <section id="output"></section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
