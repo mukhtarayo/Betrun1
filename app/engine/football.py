@@ -6,13 +6,13 @@ from .audit import parameter_integrity, formula_integrity, ev_simulation
 from .adapters import sources as src
 
 LEAGUE_AVG = float(os.getenv("FOOTBALL_LEAGUE_AVG_GOALS","2.6"))
-STRICT = os.getenv("STRICT_TEAM_MATCH","1") == "1"
 
 SUPPORTED_MARKETS = [
     "1X2","Double Chance","Draw No Bet",
     "Over/Under","BTTS","Team Goals",
     "1X2 + O/U","DC + BTTS","Result + BTTS",
-    "Correct Score","Clean Sheet","Win to Nil","Winning Margin"
+    "Correct Score","Correct Score Groups",
+    "Clean Sheet","Win to Nil","Winning Margin"
 ]
 
 def poisson_prob_matrix(lmb_home: float, lmb_away: float, max_goals: int = 10, rho: float = 0.02):
@@ -88,22 +88,33 @@ def correct_score_prob(P, i: int, j: int) -> float:
     if i<=g and j<=g: return float(P[i,j])
     return 0.0
 
-def _form_att_def(team_id: int, season: int):
-    fixtures = src.recent_fixtures(team_id, season, last=6)
-    gf=ga=n=0
-    for m in fixtures:
-        teams = m.get("teams",{})
-        goals = m.get("goals",{})
-        if teams.get("home",{}).get("id")==team_id:
-            gf += goals.get("home",0) or 0
-            ga += goals.get("away",0) or 0
-            n += 1
-        elif teams.get("away",{}).get("id")==team_id:
-            gf += goals.get("away",0) or 0
-            ga += goals.get("home",0) or 0
-            n += 1
-    n = max(1,n)
-    return max(0.2, gf/n), max(0.3, ga/n)
+def cross_match_from_live(home_id: int, away_id: int, season: int):
+    h_last = src.recent_fixtures(home_id, season, last=6)
+    a_last = src.recent_fixtures(away_id, season, last=6)
+
+    def team_att_def(team_id, fixtures):
+        gf=ga=n=0
+        for m in fixtures:
+            if m.get("teams",{}).get("home",{}).get("id")==team_id:
+                gf += m.get("goals",{}).get("home",0) or 0
+                ga += m.get("goals",{}).get("away",0) or 0
+                n += 1
+            elif m.get("teams",{}).get("away",{}).get("id")==team_id:
+                gf += m.get("goals",{}).get("away",0) or 0
+                ga += m.get("goals",{}).get("home",0) or 0
+                n += 1
+        n = max(1,n)
+        return max(0.2, gf/n), max(0.3, ga/n)
+
+    home_att = team_att_def(home_id, h_last)
+    away_att = team_att_def(away_id, a_last)
+
+    ha, hd = home_att[0], home_att[1]
+    aa, ad = away_att[0], away_att[1]
+
+    lam_home = max(0.05, (ha / max(0.2, ad)) * (LEAGUE_AVG/2.0))
+    lam_away = max(0.05, (aa / max(0.2, hd)) * (LEAGUE_AVG/2.0))
+    return lam_home, lam_away, {"home_att":ha,"home_def":hd,"away_att":aa,"away_def":ad}
 
 def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
     league = payload.get("league","")
@@ -117,44 +128,42 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
     team_goal_lines = payload.get("team_goal_lines", {"home":[0.5,1.5], "away":[0.5,1.5]})
     cs_groups = payload.get("cs_groups", [[1,0],[2,0],[2,1]])
 
-    # Resolve teams via robust search
+    # Resolve teams
     home_meta = src.search_team(home_name)
     away_meta = src.search_team(away_name)
     if not home_meta or not away_meta:
-        reason = "Team not found via API (STRICT_TEAM_MATCH=on)" if STRICT else "Team not found via API"
-        return {"status":"SKIPPED","reason":reason,"league":league,"home":home_name,"away":away_name}
+        return {"status":"SKIPPED","reason":"Team not found via API","league":league,"home":home_name,"away":away_name}
 
     home_id = home_meta.get("team",{}).get("id")
     away_id = away_meta.get("team",{}).get("id")
 
-    # Background checks
-    inj_h = src.get_injuries(home_id, season)
-    inj_a = src.get_injuries(away_id, season)
-    key_out_home = bool(inj_h)
-    key_out_away = bool(inj_a)
+    # Background checks (compact)
+    injuries_home = src.get_injuries(home_id, season)
+    injuries_away = src.get_injuries(away_id, season)
+    key_out_home = True if injuries_home else False
+    key_out_away = True if injuries_away else False
 
-    ha_att, ha_def = _form_att_def(home_id, season)
-    aa_att, aa_def = _form_att_def(away_id, season)
-
-    lam_h = max(0.05, (ha_att / max(0.2, aa_def)) * (LEAGUE_AVG/2.0))
-    lam_a = max(0.05, (aa_att / max(0.2, ha_def)) * (LEAGUE_AVG/2.0))
-
+    # Winner Mode parameters from live recent form
+    lam_h, lam_a, form = cross_match_from_live(home_id, away_id, season)
     if ctx.get("derby", False):
-        lam_h *= 1.03; lam_a *= 1.03
-    if key_out_home: lam_h *= 0.93
-    if key_out_away: lam_a *= 0.93
+        lam_h *= 1.03
+        lam_a *= 1.03
+    if key_out_home:
+        lam_h *= 0.93
+    if key_out_away:
+        lam_a *= 0.93
 
     rho = 0.05 if ctx.get("derby", False) else 0.02
     P = poisson_prob_matrix(lam_h, lam_a, max_goals=10, rho=rho)
 
     # Winner Mode
-    wm_pct = probs_from_matrix(P)
-    wm_fair = {k: (1.0/wm_pct[k]) if wm_pct[k]>0 else None for k in wm_pct}
+    wm_pct = probs_from_matrix(P)  # {'1':..., 'X':..., '2':...} in 0..1
+    wm_fair = {k: (1.0/wm_pct[k]) if wm_pct[k] > 0 else None for k in wm_pct}
     winner_mode_table = {
         "rows":[
             {"outcome":"1","Poisson%": round(wm_pct["1"]*100,2),"Bayesian%": round(wm_pct["1"]*100,2),
              "DixonColes%": round(wm_pct["1"]*100,2), "FairOdds": round(wm_fair["1"],3) if wm_fair["1"] else None,
-             "notes": f"λ {lam_h:.2f}-{lam_a:.2f}; form HA {ha_att:.2f}/{ha_def:.2f}, AA {aa_att:.2f}/{aa_def:.2f}"},
+             "notes": f"λ {lam_h:.2f}-{lam_a:.2f}; form HA {form['home_att']:.2f}/{form['home_def']:.2f}, AA {form['away_att']:.2f}/{form['away_def']:.2f}"},
             {"outcome":"X","Poisson%": round(wm_pct["X"]*100,2),"Bayesian%": round(wm_pct["X"]*100,2),
              "DixonColes%": round(wm_pct["X"]*100,2), "FairOdds": round((1.0/wm_pct['X']),3) if wm_pct['X']>0 else None,
              "notes": "DC low-score effect"},
@@ -171,16 +180,19 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
     wm_best_sel = max(wm_pct, key=wm_pct.get)
     wm_equals_vm = (wm_best_sel == best_vm_sel)
 
-    # Decision
+    # ---------- DECISION BLOCK (away allowed) ----------
     agreement = None
     if best_vm_edge >= 0.05:
-        status = "FINAL_PICK"
         if wm_equals_vm:
-            remark = "Final Pick (WM=VM & Edge ≥ 5%)"; agreement = "AGREE"
+            status = "FINAL_PICK"
+            remark = "Final Pick (WM=VM & Edge ≥ 5%)"
+            agreement = "AGREE"
         else:
-            remark = "Final Pick (WM≠VM but Edge ≥ 5%)"; agreement = "DISAGREE"
+            status = "FINAL_PICK"
+            remark = "Final Pick (WM≠VM but Edge ≥ 5%)"
+            agreement = "DISAGREE"
         sel = best_vm_sel or wm_best_sel
-        ev = ev_simulation(wm_pct.get(sel,0.0), odds.get(sel))
+        ev = ev_simulation(wm_pct.get(sel, 0.0), odds.get(sel))
     else:
         return {
             "site": "Betrun",
@@ -192,81 +204,90 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
             "reason": "Edge < 5% (no value)",
             "sources": ["API-FOOTBALL: teams,fixtures(last6),injuries"]
         }
+    # ---------- END DECISION BLOCK ----------
 
-    # Markets
+    # ---------- MARKETS ----------
+    Pmat = P
     market_results = {}
-    # 1X2 / DC / DNB
-    market_results["1X2"] = {k: round(v*100,2) for k,v in wm_pct.items()}
-    dc = {"1X": wm_pct["1"]+wm_pct["X"], "12": wm_pct["1"]+wm_pct["2"], "X2": wm_pct["X"]+wm_pct["2"]}
-    market_results["Double Chance"] = {k: round(v*100,2) for k,v in dc.items()}
-    dnb_home = wm_pct["1"] / (1.0 - wm_pct["X"]) if wm_pct["X"]<1.0 else 0.0
-    dnb_away = wm_pct["2"] / (1.0 - wm_pct["X"]) if wm_pct["X"]<1.0 else 0.0
-    market_results["Draw No Bet"] = {"Home": round(dnb_home*100,2), "Away": round(dnb_away*100,2)}
+    if "1X2" in markets or "Double Chance" in markets or "Draw No Bet" in markets:
+        market_results["1X2"] = {k: round(v*100,2) for k,v in wm_pct.items()}
+        dc = {"1X": wm_pct["1"]+wm_pct["X"], "12": wm_pct["1"]+wm_pct["2"], "X2": wm_pct["X"]+wm_pct["2"]}
+        market_results["Double Chance"] = {k: round(v*100,2) for k,v in dc.items()}
+        dnb_home = wm_pct["1"] / (1.0 - wm_pct["X"]) if wm_pct["X"] < 1.0 else 0.0
+        dnb_away = wm_pct["2"] / (1.0 - wm_pct["X"]) if wm_pct["X"] < 1.0 else 0.0
+        market_results["Draw No Bet"] = {"Home": round(dnb_home*100,2), "Away": round(dnb_away*100,2)}
 
-    # O/U
-    ou = {}
-    for line in payload.get("ou_lines", [1.5,2.5,3.5]):
-        over, under = over_under_probs(P, line)
-        ou[f"O{line}"] = round(over*100,2)
-        ou[f"U{line}"] = round(under*100,2)
-    market_results["Over/Under"] = ou
+    if "Over/Under" in markets:
+        ou = {}
+        for line in ou_lines:
+            over, under = over_under_probs(Pmat, line)
+            ou[f"O{line}"] = round(over*100,2)
+            ou[f"U{line}"] = round(under*100,2)
+        market_results["Over/Under"] = ou
 
-    # BTTS
-    yes, no = btts_probs(P)
-    market_results["BTTS"] = {"Yes": round(yes*100,2), "No": round(no*100,2)}
+    if "BTTS" in markets:
+        yes, no = btts_probs(Pmat)
+        market_results["BTTS"] = {"Yes": round(yes*100,2), "No": round(no*100,2)}
 
-    # Team Goals
-    tg = {"home":{}, "away":{}}
-    for line in team_goal_lines.get("home",[0.5,1.5]):
-        tg["home"][f"> {line}"] = round(team_goals_over(P,"home",line)*100,2)
-    for line in team_goal_lines.get("away",[0.5,1.5]):
-        tg["away"][f"> {line}"] = round(team_goals_over(P,"away",line)*100,2)
-    market_results["Team Goals"] = tg
+    if "Team Goals" in markets:
+        tg = {"home":{}, "away":{}}
+        for line in team_goal_lines.get("home",[0.5,1.5]):
+            tg["home"][f"> {line}"] = round(team_goals_over(Pmat,"home",line)*100,2)
+        for line in team_goal_lines.get("away",[0.5,1.5]):
+            tg["away"][f"> {line}"] = round(team_goals_over(Pmat,"away",line)*100,2)
+        market_results["Team Goals"] = tg
 
-    # 1X2 + O/U combos
-    combos = {}
-    g = P.shape[0]-1
-    def sum_cond(cond):
-        s=0.0
-        for i in range(g+1):
-            for j in range(g+1):
-                if cond(i,j): s+=P[i,j]
-        return s
-    for line in ou.keys():
-        L = float(line[1:])
-        combos[f"1 & O{L}"] = round(sum_cond(lambda i,j: i>j and (i+j)>L)*100,2)
-        combos[f"1 & U{L}"] = round(sum_cond(lambda i,j: i>j and (i+j)<=L)*100,2)
-        combos[f"X & O{L}"] = round(sum_cond(lambda i,j: i==j and (i+j)>L)*100,2)
-        combos[f"X & U{L}"] = round(sum_cond(lambda i,j: i==j and (i+j)<=L)*100,2)
-        combos[f"2 & O{L}"] = round(sum_cond(lambda i,j: i<j and (i+j)>L)*100,2)
-        combos[f"2 & U{L}"] = round(sum_cond(lambda i,j: i<j and (i+j)<=L)*100,2)
-    market_results["1X2 + O/U"] = combos
+    if "1X2 + O/U" in markets:
+        combos = {}
+        g = Pmat.shape[0]-1
+        def sum_cond(cond):
+            s = 0.0
+            for i in range(g+1):
+                for j in range(g+1):
+                    if cond(i,j): s += Pmat[i,j]
+            return s
+        for line in ou_lines:
+            combos[f"1 & O{line}"] = round(sum_cond(lambda i,j: i>j and (i+j)>line)*100,2)
+            combos[f"1 & U{line}"] = round(sum_cond(lambda i,j: i>j and (i+j)<=line)*100,2)
+            combos[f"X & O{line}"] = round(sum_cond(lambda i,j: i==j and (i+j)>line)*100,2)
+            combos[f"X & U{line}"] = round(sum_cond(lambda i,j: i==j and (i+j)<=line)*100,2)
+            combos[f"2 & O{line}"] = round(sum_cond(lambda i,j: i<j and (i+j)>line)*100,2)
+            combos[f"2 & U{line}"] = round(sum_cond(lambda i,j: i<j and (i+j)<=line)*100,2)
+        market_results["1X2 + O/U"] = combos
 
-    # DC + BTTS / Result + BTTS
-    dc_bt = {}
-    dc_bt["1X & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i>=j) and i>0 and j>0)*100,2)
-    dc_bt["X2 & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (j>=i) and i>0 and j>0)*100,2)
-    dc_bt["12 & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i!=j) and i>0 and j>0)*100,2)
-    market_results["DC + BTTS"] = dc_bt
+    if "DC + BTTS" in markets or "Result + BTTS" in markets:
+        g = Pmat.shape[0]-1
+        if "DC + BTTS" in markets:
+            dc_bt = {}
+            dc_bt["1X & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i>=j) and i>0 and j>0)*100,2)
+            dc_bt["X2 & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (j>=i) and i>0 and j>0)*100,2)
+            dc_bt["12 & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i!=j) and i>0 and j>0)*100,2)
+            market_results["DC + BTTS"] = dc_bt
+        if "Result + BTTS" in markets:
+            r_bt = {}
+            r_bt["1 & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i>j and i>0 and j>0))*100,2)
+            r_bt["X & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i==j and i>0 and j>0))*100,2)
+            r_bt["2 & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i<j and i>0 and j>0))*100,2)
+            market_results["Result + BTTS"] = r_bt
 
-    r_bt = {}
-    r_bt["1 & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i>j and i>0 and j>0))*100,2)
-    r_bt["X & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i==j and i>0 and j>0))*100,2)
-    r_bt["2 & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i<j and i>0 and j>0))*100,2)
-    market_results["Result + BTTS"] = r_bt
+    if "Correct Score" in markets or "Correct Score Groups" in markets:
+        cs = {}
+        for a,b in cs_groups:
+            cs[f"{a}:{b}"] = round(correct_score_prob(Pmat,a,b)*100,4)
+        market_results["Correct Score"] = cs
 
-    # Clean sheet / Win to Nil / Winning Margin
-    home_cs = sum(P[i,0] for i in range(g+1))
-    away_cs = sum(P[0,j] for j in range(g+1))
-    market_results["Clean Sheet"] = {"Home Yes": round(home_cs*100,2), "Away Yes": round(away_cs*100,2)}
+    if "Clean Sheet" in markets or "Win to Nil" in markets or "Winning Margin" in markets:
+        g = Pmat.shape[0]-1
+        home_cs = sum(Pmat[i,0] for i in range(g+1))
+        away_cs = sum(Pmat[0,j] for j in range(g+1))
+        market_results["Clean Sheet"] = {"Home Yes": round(home_cs*100,2), "Away Yes": round(away_cs*100,2)}
+        home_wtn = sum(Pmat[i,0] for i in range(1,g+1))
+        away_wtn = sum(Pmat[0,j] for j in range(1,g+1))
+        market_results["Win to Nil"] = {"Home": round(home_wtn*100,2), "Away": round(away_wtn*100,2)}
+        market_results["Winning Margin"] = {k: round(v*100,2) for k,v in winning_margin_probs(Pmat).items()}
+    # ---------- END MARKETS ----------
 
-    home_wtn = sum(P[i,0] for i in range(1,g+1))
-    away_wtn = sum(P[0,j] for j in range(1,g+1))
-    market_results["Win to Nil"] = {"Home": round(home_wtn*100,2), "Away": round(away_wtn*100,2)}
-
-    market_results["Winning Margin"] = {k: round(v*100,2) for k,v in winning_margin_probs(P).items()}
-
-    return {
+    result = {
         "site": "Betrun",
         "sport": "football",
         "league": league,
@@ -287,7 +308,7 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
             "vm_best": best_vm_sel,
             "wm_equals_vm": wm_equals_vm,
             "edge_best_pp": round(best_vm_edge*100,2),
-            "remark": "Final Pick" if best_vm_edge>=0.05 else "Omitted"
+            "remark": remark
         },
         "audit": {
             "parameters_ok": parameter_integrity(payload),
@@ -295,8 +316,9 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
             "ev_sim": round(ev,4),
             "calibration_note": f"λ from live recent form; DC rho={rho:.2f}"
         },
-        "status": "FINAL_PICK",
+        "status": status,
         "remark": remark,
         "agreement": agreement,
         "sources": ["API-FOOTBALL: teams,fixtures(last6),injuries"]
     }
+    return result
