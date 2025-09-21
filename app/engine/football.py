@@ -1,3 +1,4 @@
+# app/engine/football.py
 from typing import Dict, Any, List, Tuple
 import math, os
 import numpy as np
@@ -108,7 +109,6 @@ def cross_match_from_live(home_id: int, away_id: int, season: int):
 
     home_att = team_att_def(home_id, h_last)
     away_att = team_att_def(away_id, a_last)
-
     ha, hd = home_att[0], home_att[1]
     aa, ad = away_att[0], away_att[1]
 
@@ -157,7 +157,7 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
     P = poisson_prob_matrix(lam_h, lam_a, max_goals=10, rho=rho)
 
     # Winner Mode
-    wm_pct = probs_from_matrix(P)  # {'1':..., 'X':..., '2':...} in 0..1
+    wm_pct = probs_from_matrix(P)
     wm_fair = {k: (1.0/wm_pct[k]) if wm_pct[k] > 0 else None for k in wm_pct}
     winner_mode_table = {
         "rows":[
@@ -180,18 +180,69 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
     wm_best_sel = max(wm_pct, key=wm_pct.get)
     wm_equals_vm = (wm_best_sel == best_vm_sel)
 
-    # ---------- DECISION BLOCK (away allowed) ----------
+    # ---------- REASONS & GENERIC WARNINGS ----------
+    implied = {}
+    for k in ("1","X","2"):
+        o = odds.get(k)
+        if o and o > 0:
+            implied[k] = 1.0/o  # implied probability
+
+    warning = None
+    warning_reasons: List[str] = []
+    rationale_parts: List[str] = []
+
+    # core rationale from API features
+    rationale_parts.append(f"λ (goals model): {lam_h:.2f}-{lam_a:.2f}")
+    rationale_parts.append(f"Form: HA {form['home_att']:.2f}/{form['home_def']:.2f}, AA {form['away_att']:.2f}/{form['away_def']:.2f}")
+    if key_out_home: rationale_parts.append("Home injuries detected")
+    if key_out_away: rationale_parts.append("Away injuries detected")
+    if ctx.get('derby', False): rationale_parts.append("Derby factor applied")
+
+    # Selected side (fallback to WM if VM missing)
+    selected = best_vm_sel or wm_best_sel
+
+    # Under-dog warning (works for home, away or draw)
+    # - If selected is market underdog vs the other side, warn.
+    # - If selected is Draw and market strongly favours a side, warn.
+    if implied and selected in ("1","2","X"):
+        if selected == "1" and ('1' in implied) and ('2' in implied) and implied['1'] < implied['2']:
+            warning = "CAUTION"
+            warning_reasons.append("Model favours HOME while market prices home as underdog.")
+            if lam_h > lam_a: warning_reasons.append("Goals model leans toward home scoring.")
+            if form['home_att'] > form['away_att'] + 0.20: warning_reasons.append("Home attack trend stronger.")
+            if key_out_away: warning_reasons.append("Away injuries may weaken opposition.")
+        elif selected == "2" and ('1' in implied) and ('2' in implied) and implied['2'] < implied['1']:
+            warning = "CAUTION"
+            warning_reasons.append("Model favours AWAY while market prices away as underdog.")
+            if lam_a > lam_h: warning_reasons.append("Goals model leans toward away scoring.")
+            if form['away_att'] > form['home_att'] + 0.20: warning_reasons.append("Away attack trend stronger.")
+            if key_out_home: warning_reasons.append("Home injuries may weaken opposition.")
+        elif selected == "X" and ('X' in implied) and (('1' in implied) or ('2' in implied)):
+            # if market heavily leans to a side (max of 1 or 2), but model prefers draw
+            side_imp = max(implied.get('1',0), implied.get('2',0))
+            if implied['X'] < side_imp:
+                warning = "CAUTION"
+                warning_reasons.append("Model favours DRAW against market side-lean.")
+                if abs(lam_h - lam_a) < 0.15: warning_reasons.append("Goals model suggests parity.")
+                warning_reasons.append("Low-score/DC effect increases draw probability.")
+
+    # Large value gap
+    if best_vm_edge >= 0.15:
+        warning = warning or "CAUTION"
+        warning_reasons.append("Large value gap vs bookmaker (≥15pp). Verify lineups/news.")
+
+    # ---------- DECISION ----------
     agreement = None
     if best_vm_edge >= 0.05:
         if wm_equals_vm:
             status = "FINAL_PICK"
-            remark = "Final Pick (WM=VM & Edge ≥ 5%)"
+            remark = "Final Pick"
             agreement = "AGREE"
         else:
             status = "FINAL_PICK"
             remark = "Final Pick (WM≠VM but Edge ≥ 5%)"
             agreement = "DISAGREE"
-        sel = best_vm_sel or wm_best_sel
+        sel = selected
         ev = ev_simulation(wm_pct.get(sel, 0.0), odds.get(sel))
     else:
         return {
@@ -204,10 +255,8 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
             "reason": "Edge < 5% (no value)",
             "sources": ["API-FOOTBALL: teams,fixtures(last6),injuries"]
         }
-    # ---------- END DECISION BLOCK ----------
 
     # ---------- MARKETS ----------
-    Pmat = P
     market_results = {}
     if "1X2" in markets or "Double Chance" in markets or "Draw No Bet" in markets:
         market_results["1X2"] = {k: round(v*100,2) for k,v in wm_pct.items()}
@@ -220,31 +269,31 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "Over/Under" in markets:
         ou = {}
         for line in ou_lines:
-            over, under = over_under_probs(Pmat, line)
+            over, under = over_under_probs(P, line)
             ou[f"O{line}"] = round(over*100,2)
             ou[f"U{line}"] = round(under*100,2)
         market_results["Over/Under"] = ou
 
     if "BTTS" in markets:
-        yes, no = btts_probs(Pmat)
+        yes, no = btts_probs(P)
         market_results["BTTS"] = {"Yes": round(yes*100,2), "No": round(no*100,2)}
 
     if "Team Goals" in markets:
         tg = {"home":{}, "away":{}}
         for line in team_goal_lines.get("home",[0.5,1.5]):
-            tg["home"][f"> {line}"] = round(team_goals_over(Pmat,"home",line)*100,2)
+            tg["home"][f"> {line}"] = round(team_goals_over(P,"home",line)*100,2)
         for line in team_goal_lines.get("away",[0.5,1.5]):
-            tg["away"][f"> {line}"] = round(team_goals_over(Pmat,"away",line)*100,2)
+            tg["away"][f"> {line}"] = round(team_goals_over(P,"away",line)*100,2)
         market_results["Team Goals"] = tg
 
     if "1X2 + O/U" in markets:
         combos = {}
-        g = Pmat.shape[0]-1
+        g = P.shape[0]-1
         def sum_cond(cond):
             s = 0.0
             for i in range(g+1):
                 for j in range(g+1):
-                    if cond(i,j): s += Pmat[i,j]
+                    if cond(i,j): s += P[i,j]
             return s
         for line in ou_lines:
             combos[f"1 & O{line}"] = round(sum_cond(lambda i,j: i>j and (i+j)>line)*100,2)
@@ -256,36 +305,38 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
         market_results["1X2 + O/U"] = combos
 
     if "DC + BTTS" in markets or "Result + BTTS" in markets:
-        g = Pmat.shape[0]-1
+        g = P.shape[0]-1
         if "DC + BTTS" in markets:
             dc_bt = {}
-            dc_bt["1X & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i>=j) and i>0 and j>0)*100,2)
-            dc_bt["X2 & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (j>=i) and i>0 and j>0)*100,2)
-            dc_bt["12 & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i!=j) and i>0 and j>0)*100,2)
+            dc_bt["1X & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i>=j) and i>0 and j>0)*100,2)
+            dc_bt["X2 & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (j>=i) and i>0 and j>0)*100,2)
+            dc_bt["12 & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i!=j) and i>0 and j>0)*100,2)
             market_results["DC + BTTS"] = dc_bt
         if "Result + BTTS" in markets:
             r_bt = {}
-            r_bt["1 & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i>j and i>0 and j>0))*100,2)
-            r_bt["X & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i==j and i>0 and j>0))*100,2)
-            r_bt["2 & GG"] = round(sum(Pmat[i,j] for i in range(g+1) for j in range(g+1) if (i<j and i>0 and j>0))*100,2)
+            r_bt["1 & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i>j and i>0 and j>0))*100,2)
+            r_bt["X & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i==j and i>0 and j>0))*100,2)
+            r_bt["2 & GG"] = round(sum(P[i,j] for i in range(g+1) for j in range(g+1) if (i<j and i>0 and j>0))*100,2)
             market_results["Result + BTTS"] = r_bt
 
     if "Correct Score" in markets or "Correct Score Groups" in markets:
         cs = {}
         for a,b in cs_groups:
-            cs[f"{a}:{b}"] = round(correct_score_prob(Pmat,a,b)*100,4)
+            cs[f"{a}:{b}"] = round(correct_score_prob(P,a,b)*100,4)
         market_results["Correct Score"] = cs
 
     if "Clean Sheet" in markets or "Win to Nil" in markets or "Winning Margin" in markets:
-        g = Pmat.shape[0]-1
-        home_cs = sum(Pmat[i,0] for i in range(g+1))
-        away_cs = sum(Pmat[0,j] for j in range(g+1))
+        g = P.shape[0]-1
+        home_cs = sum(P[i,0] for i in range(g+1))
+        away_cs = sum(P[0,j] for j in range(g+1))
         market_results["Clean Sheet"] = {"Home Yes": round(home_cs*100,2), "Away Yes": round(away_cs*100,2)}
-        home_wtn = sum(Pmat[i,0] for i in range(1,g+1))
-        away_wtn = sum(Pmat[0,j] for j in range(1,g+1))
+        home_wtn = sum(P[i,0] for i in range(1,g+1))
+        away_wtn = sum(P[0,j] for j in range(1,g+1))
         market_results["Win to Nil"] = {"Home": round(home_wtn*100,2), "Away": round(away_wtn*100,2)}
-        market_results["Winning Margin"] = {k: round(v*100,2) for k,v in winning_margin_probs(Pmat).items()}
-    # ---------- END MARKETS ----------
+        market_results["Winning Margin"] = {k: round(v*100,2) for k,v in winning_margin_probs(P).items()}
+
+    reason_text = "; ".join(rationale_parts)
+    warnings_list = warning_reasons if warning_reasons else None
 
     result = {
         "site": "Betrun",
@@ -308,7 +359,7 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
             "vm_best": best_vm_sel,
             "wm_equals_vm": wm_equals_vm,
             "edge_best_pp": round(best_vm_edge*100,2),
-            "remark": remark
+            "remark": "Final Pick" if status=="FINAL_PICK" else "—"
         },
         "audit": {
             "parameters_ok": parameter_integrity(payload),
@@ -317,8 +368,12 @@ def analyze_football_match(payload: Dict[str, Any]) -> Dict[str, Any]:
             "calibration_note": f"λ from live recent form; DC rho={rho:.2f}"
         },
         "status": status,
-        "remark": remark,
-        "agreement": agreement,
+        "remark": "Final Pick" if status=="FINAL_PICK" else "—",
+        "agreement": "AGREE" if wm_equals_vm and best_vm_edge>=0.05 else "DISAGREE",
+        "bookmaker_implied": {k: round(v*100,2) for k,v in implied.items()} if implied else None,
+        "warning": warning,
+        "warning_reasons": warnings_list,
+        "reason": reason_text,
         "sources": ["API-FOOTBALL: teams,fixtures(last6),injuries"]
     }
     return result
